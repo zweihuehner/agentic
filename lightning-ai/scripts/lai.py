@@ -283,9 +283,31 @@ def get_teamspace(name=None, org=None, user=None):
         return Teamspace(**kwargs) if kwargs else Teamspace()
     except Exception as e:  # noqa: BLE001 - surface the real cause to the user
         tried = ", ".join(f"{k}={v!r}" for k, v in kwargs.items()) or "no arguments (inferred)"
+        # Two very different failures arrive through the same exception, and guessing
+        # wrong sends people down the wrong path for a long time. A rejected key means
+        # the credentials are bad — the teamspace name is irrelevant and telling someone
+        # to check it is actively misleading. Rotating a key is the usual cause: the old
+        # value lingers in an exported env var (or a Studio's injected environment) long
+        # after the key itself is dead.
+        if "authentication failed" in str(e).lower() or "unauthor" in str(e).lower():
+            st = auth_state()
+            sys.exit(
+                f"Credentials were REJECTED by the API ({type(e).__name__}).\n"
+                f"Currently using {st['source']}: "
+                f"LIGHTNING_API_KEY={mask(st['api_key'])}\n\n"
+                "The teamspace name is not the problem — these credentials are not valid.\n"
+                "Most likely the key was rotated or revoked and this environment still\n"
+                "holds the old one. Fix by:\n"
+                "  - updating LIGHTNING_API_KEY / LIGHTNING_USER_ID to the new values, or\n"
+                "  - `unset LIGHTNING_API_KEY` and running `lightning login`, or\n"
+                "  - inside a Studio, restarting it so the new key is injected.\n"
+                "New keys: lightning.ai -> your org (top-left) -> Global settings -> API Keys.\n"
+                "Then re-run `python lai.py auth` to confirm."
+            )
         sys.exit(
             f"Could not resolve a teamspace ({type(e).__name__}: {e}).\n"
             f"Tried: {tried}\n\n"
+            "Credentials look valid, so this is about *where* to work, not who you are.\n"
             "Outside a Studio you must name the teamspace and say who owns it:\n"
             "  --teamspace <name> --org <org>     (organization-owned)\n"
             "  --teamspace <name> --user <user>   (personal teamspace — no org)\n"
