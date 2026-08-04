@@ -107,12 +107,34 @@ export LIGHTNING_ORG=<org>
 `lai.py auth` warns when these are unset, since it's fine in a Studio and a failure
 everywhere else.
 
+## After rotating a key
+
+Rotating is the right move whenever a key may have been exposed, but the old value
+survives in more places than people expect, and every one of them keeps failing until
+updated:
+
+- **Exported env vars** in the current shell and in `~/.zshrc` / `~/.bashrc`. These take
+  precedence over everything else, so a stale export defeats a fresh `lightning login`.
+- **A Lightning Studio's injected environment.** Inside a Studio the credentials are
+  injected at boot, not read from a dotfile — so the running Studio keeps the dead key
+  until it is **restarted**. Nothing you edit in a shell profile changes that.
+- **`~/.lightning/credentials.json`**, if you previously ran `lightning login`.
+- **CI secrets, job `env=` blocks, and teamspace secrets** you set earlier.
+
+The symptom is the same in all cases: `Authentication failed. Please run 'lightning
+login'`. `lai.py` detects this specific failure and says so plainly rather than blaming
+the teamspace name — which is the misleading conclusion the raw error invites, since the
+same exception type covers both.
+
+Prefer `ts.set_secret(...)` over pasting keys into job `env=`, so a rotation is one
+update rather than a hunt.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | Script hangs, no output | No credentials — SDK opened a browser and is blocking | Set the env vars; run `lai.py auth` |
-| `Authentication failed. Please run 'lightning login'` | Key revoked, mistyped, or user-id/key mismatch | Regenerate; keys are shown once |
+| `Authentication failed. Please run 'lightning login'` | Key revoked, rotated, mistyped, or user-id/key mismatch | See "after rotating a key" below |
 | `lightning login` succeeded but calls still fail | A stale `LIGHTNING_API_KEY` export is overriding the file | `unset LIGHTNING_API_KEY`, or update it |
 | Works in the Studio, fails locally | Teamspace/org not named | Export `LIGHTNING_TEAMSPACE` / `LIGHTNING_ORG` |
 | `ImportError: lightning_sdk` | Wrong interpreter, or Python < 3.11 | `pip install -U lightning-sdk` in the right env |
