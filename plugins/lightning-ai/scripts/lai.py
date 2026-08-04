@@ -115,10 +115,17 @@ def mask(secret: str | None) -> str:
     digest is one-way, and it still does the only job the prefix was doing: telling you
     at a glance whether the key loaded here is the same one you configured elsewhere.
     Compare digests, never characters.
+
+    The fingerprint runs through PBKDF2 rather than a bare SHA-256. A plain digest of a
+    short or structured credential is worth little: anyone holding a candidate value can
+    confirm it instantly. A deliberately slow derivation removes that, and at one call
+    per invocation the cost is irrelevant next to the API round-trip that follows.
     """
     if not secret:
         return "(unset)"
-    digest = hashlib.sha256(secret.encode()).hexdigest()[:8]
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", secret.encode(), b"lai.py credential fingerprint v1", 200_000
+    ).hex()[:8]
     return f"set — {len(secret)} chars, fingerprint {digest}"
 
 
