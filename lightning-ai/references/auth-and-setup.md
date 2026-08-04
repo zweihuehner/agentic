@@ -16,7 +16,7 @@ Credentials are never reproduced in the output, not even partially — you get a
 a one-way fingerprint:
 
 ```
-LIGHTNING_API_KEY     set — 36 chars, fingerprint 639f640d
+LIGHTNING_API_KEY     set — 36 chars, fingerprint 13d7d621
 ```
 
 The usual convention of showing the first and last four characters is a trap: those are
