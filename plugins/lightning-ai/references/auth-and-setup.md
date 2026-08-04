@@ -9,9 +9,19 @@ python scripts/lai.py auth
 ```
 
 It reports the Python version, whether the SDK is installed, which credential source will
-be used, and then *proves* the credentials work by making a real API call. Keys are masked
-in the output (`abcd…wxyz  (36 chars)`), never printed in full. Exit code 1 means not
-usable.
+be used, and then *proves* the credentials work by making a real API call. Exit code 1
+means not usable.
+
+Credentials are never reproduced in the output, not even partially — you get a length and
+a one-way fingerprint:
+
+```
+LIGHTNING_API_KEY     set — 36 chars, fingerprint 639f640d
+```
+
+The usual convention of showing the first and last four characters is a trap: those are
+real key material, and terminal output ends up in issues, screenshots and docs. Compare
+fingerprints when you need to know whether two environments hold the same key.
 
 ## Install
 

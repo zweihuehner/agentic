@@ -19,6 +19,7 @@ never quote a remembered number.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import sys
 
@@ -102,12 +103,23 @@ WHERE_TO_GET_KEY = """  Where to get your credentials:
 
 
 def mask(secret: str | None) -> str:
-    """Show enough to recognise a key, never enough to use it."""
+    """Describe a credential without reproducing any part of it.
+
+    An earlier version showed the first and last four characters, which is the common
+    convention and looks harmless. It isn't: those eight characters are real key
+    material, and once they appear in terminal output they get pasted into issues, docs
+    and screenshots. That is not hypothetical — it is exactly how a fragment of a live
+    key ended up committed to a public repository in this project's own history.
+
+    So emit nothing derived from the value except its length and a short digest. The
+    digest is one-way, and it still does the only job the prefix was doing: telling you
+    at a glance whether the key loaded here is the same one you configured elsewhere.
+    Compare digests, never characters.
+    """
     if not secret:
         return "(unset)"
-    if len(secret) <= 12:
-        return "*" * len(secret)
-    return f"{secret[:4]}…{secret[-4:]}  ({len(secret)} chars)"
+    digest = hashlib.sha256(secret.encode()).hexdigest()[:8]
+    return f"set — {len(secret)} chars, fingerprint {digest}"
 
 
 def credentials_path():
