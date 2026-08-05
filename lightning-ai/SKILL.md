@@ -94,6 +94,12 @@ Ask yourself, in order:
 - **Studio env or Docker image?** `studio=` reuses an existing Studio's environment —
   the fast path when the code already runs there. `image=` gives a clean, pinned
   environment. They're mutually exclusive; passing both or neither is an error.
+  What decides it is often not convenience but **machine availability**: `studio=` also
+  pins the job to the Studio's cloud account, and `cloud=` will not override that, so a
+  machine that account doesn't sell is simply unreachable from that Studio (400 at submit;
+  see `references/pitfalls.md`). When the machine is fixed — reproducing a baseline
+  recorded on specific hardware, say — go `image=` and bootstrap the environment in the
+  job command. `assets/bootstrap_job.py` does that end to end.
 - **Where does the data live and where do artifacts go?** See §Storage below. Getting
   this wrong is the most common source of "my job ran but I can't find the output".
 
@@ -146,13 +152,18 @@ the case. Then do what they asked if they confirm. They may know something you d
 ```python
 job.wait()            # blocks until terminal state
 job.status            # Pending | Running | Completed | Failed | Stopping | Stopped
-job.logs              # captured logs
+job.logs              # captured logs — TERMINAL JOBS ONLY, raises while Pending/Running
 job.total_cost        # actual spend so far
 job.link              # URL to the job in the UI
 ```
 
 For long runs, don't sit in a blocking `job.wait()` inside a script the user is watching
 — poll status, or hand back the `job.link` and let them watch it in the UI.
+
+`job.logs` is a post-mortem, not a stream: reading it before the job reaches a terminal
+state raises `RuntimeError`, so progress has to come from `job.status` (or the UI). Make
+the job print whatever it needs to report — a metrics table, a diff — to stdout, and read
+it out of `job.logs` once the job ends.
 
 ### 6. Clean up
 
@@ -295,6 +306,9 @@ These are the ones that actually bite. Full explanations and fixes in
   from scratch or when anything smells like a credentials problem.
 - `assets/launcher_template.py` — starting point for a job launcher, with the sweep
   naming and confirmation gate done correctly.
+- `assets/bootstrap_job.py` — launcher for the `image=` path: the job installs its own
+  toolchain, clones the repo (private ones included) and runs. Use it when `studio=` can't
+  reach the machine you need, or when a pinned, from-scratch environment is the point.
 - `references/sdk-api.md` — verified `Job.run` / `MMT.run` / `Teamspace` / `Studio` API
   surface, auth setup. Read before writing SDK calls from memory.
 - `references/cost-and-machines.md` — machine families, right-sizing, live price snapshot.
