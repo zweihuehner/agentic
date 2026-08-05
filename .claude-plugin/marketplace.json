@@ -1,0 +1,14 @@
+{
+  "name": "zweihuehner-skills",
+  "description": "Personal Claude Code skills, grounded against live systems rather than docs",
+  "owner": {
+    "name": "zweihuehner"
+  },
+  "plugins": [
+    {
+      "name": "lightning-ai",
+      "source": "./lightning-ai",
+      "description": "Research and development work on Lightning AI: authentication, batch Jobs via lightning_sdk, live machine pricing across cloud accounts, cost control, and storage layout"
+    }
+  ]
+}

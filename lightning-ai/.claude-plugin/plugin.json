@@ -1,0 +1,8 @@
+{
+  "name": "lightning-ai",
+  "description": "Running research and development work on Lightning AI: authentication, submitting and monitoring batch Jobs with lightning_sdk, choosing and pricing GPU machines, keeping credit spend under control, and laying out storage sensibly",
+  "author": {
+    "name": "zweihuehner"
+  },
+  "homepage": "https://github.com/zweihuehner/claude-skills"
+}

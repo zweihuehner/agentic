@@ -14,8 +14,40 @@ when needed, so a large skill costs nothing until it's relevant.
 
 ## Install
 
-Skills are discovered from `~/.claude/skills/` (all projects) or `<repo>/.claude/skills/`
-(one project). Symlink so updates land in both places:
+This repo is also a **plugin marketplace**, which is the way to install if you want
+updates without maintaining a copy:
+
+```
+/plugin marketplace add zweihuehner/claude-skills
+/plugin install lightning-ai@zweihuehner-skills
+```
+
+Refresh later with `/plugin marketplace update`. Plugin skills are namespaced, so the
+skill is `/lightning-ai:lightning-ai`.
+
+A repository can require the marketplace for everyone who works in it, so contributors
+are prompted to install on folder trust rather than being told to go and clone something.
+In that repo's `.claude/settings.json`:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "zweihuehner-skills": {
+      "source": { "source": "github", "repo": "zweihuehner/claude-skills" }
+    }
+  },
+  "enabledPlugins": { "lightning-ai@zweihuehner-skills": true }
+}
+```
+
+No plugin here pins a `version`, so Claude Code falls back to the git commit SHA and
+every push is a new version. That's deliberate: for skills that are mostly documentation,
+a forgotten version bump means nobody ever receives the correction.
+
+### Or as a plain skill
+
+Skills are also discovered from `~/.claude/skills/` (all projects) or
+`<repo>/.claude/skills/` (one project). Symlink so updates land in both places:
 
 ```bash
 git clone git@github.com:zweihuehner/claude-skills.git ~/src/claude-skills
@@ -23,7 +55,10 @@ mkdir -p ~/.claude/skills
 ln -s ~/src/claude-skills/lightning-ai ~/.claude/skills/lightning-ai
 ```
 
-Restart Claude Code afterwards — skills are enumerated at startup.
+Restart Claude Code afterwards — skills are enumerated at startup. Note that because
+`lightning-ai/` now contains a `.claude-plugin/plugin.json`, a symlinked copy loads as a
+plugin named `lightning-ai@skills-dir` rather than a bare skill. It works the same; it
+just reports itself differently.
 
 ## lightning-ai
 
