@@ -108,10 +108,16 @@ List them with `teamspace.multi_machine_jobs`.
 
 ```python
 from lightning_sdk import Teamspace
-ts = Teamspace()                                    # inside a Studio
-ts = Teamspace(name="my-teamspace", org="my-org")   # org-owned teamspace
-ts = Teamspace(name="my-teamspace", user="me")      # personal teamspace (no org)
+ts = Teamspace()                                    # inside a Studio, or with
+                                                    # LIGHTNING_TEAMSPACE + LIGHTNING_ORG set
+ts = Teamspace(name="<owner>/<teamspace>")          # explicit; newer SDKs (2026.10+)
+ts = Teamspace(name="<teamspace>", org="<owner>")   # explicit; older SDKs (deprecated in 2026.10)
 ```
+
+Don't write real names into code: `lai.py whoami` prints the export lines for the first
+form, and `auth-and-setup.md` ("Naming the teamspace") shows how to list reachable
+teamspaces from the credentials. Personal teamspaces resolve through their auto-created
+org; see `pitfalls.md` for why the `user=` spelling breaks pricing on older SDKs.
 
 | member | purpose |
 |---|---|

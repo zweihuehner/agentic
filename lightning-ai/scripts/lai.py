@@ -233,28 +233,66 @@ def cmd_auth(args):
             )
         )
 
-    # 3. Prove it actually works. An unverified key is not a working setup.
+    # 3. Prove it actually works. An unverified key is not a working setup. Ask the API who
+    # we are before anything else: resolving a teamspace first would let a dead key surface
+    # as a teamspace problem, and that wrong diagnosis costs far more than the extra call.
     print(dim("\n  verifying against the API…"))
+    get_authed_user = _authed_user_helper()
     try:
-        ts = get_teamspace(args.teamspace, args.org, args.user)
-        n = len(ts.jobs)
-        print(f"  {green('OK')}  authenticated — teamspace '{ts.name}', owner {ts.owner}, {n} jobs")
+        me = get_authed_user()
+        print(f"  {green('OK')}  authenticated as '{me.name}'")
     except Exception as e:  # noqa: BLE001
         print(f"  {red('FAILED')}  {type(e).__name__}: {str(e)[:200]}")
+        if not _is_rejection(e):
+            # Not a verdict on the key. Saying "rejected" here would send someone to
+            # rotate a working key over a DNS hiccup or a 5xx.
+            print(
+                "\n  This is not a credential rejection — the API could not be reached, or the\n"
+                "  SDK failed. Check the network/proxy and retry before touching the key.\n"
+            )
+            return 1
         print(
-            "\n  Common causes:\n"
-            "    - key revoked or mistyped (they're shown once; regenerate if unsure)\n"
+            "\n  These credentials were rejected. Common causes:\n"
+            "    - key revoked, rotated or mistyped (they're shown once; create a new one)\n"
             "    - USER_ID and API_KEY from different accounts\n"
-            "    - teamspace/org name wrong — pass --teamspace and --org explicitly\n"
+            "    - a stale LIGHTNING_API_KEY export overriding the credentials file\n"
+            "  `lightning login` will not fix a dead key — see references/auth-and-setup.md.\n"
         )
         print(WHERE_TO_GET_KEY)
         return 1
 
-    if not (os.environ.get("LIGHTNING_TEAMSPACE") and os.environ.get("LIGHTNING_ORG")):
+    # 4. Where can these credentials work? Listing is cheap and answers the next question
+    # (which teamspace?) before anyone has to ask it.
+    try:
+        reachable = accessible_teamspaces(me)
+    except Exception as e:  # noqa: BLE001
+        print(f"  {yellow('WARN')}  could not list teamspaces: {type(e).__name__}: {str(e)[:200]}")
+        print()
+        return 0
+    print(f"\n  teamspaces you can reach ({len(reachable)}):")
+    for t in reachable:
+        print(f"    {t.slug}")
+    if not reachable:
+        print(yellow("    none — create one at lightning.ai, or ask to be added to one"))
+
+    # 5. If a teamspace is configured, check it is one of those — a typo in an exported
+    # LIGHTNING_TEAMSPACE should fail here, not on the first real command.
+    name, owner = _wanted(args.teamspace, args.org, args.user)
+    if name:
+        matches = _match(reachable, name, owner)
+        want = f"{owner}/{name}" if owner else name
+        if len(matches) == 1:
+            print(f"\n  {green('OK')}  configured teamspace '{want}' -> {matches[0].slug}")
+        else:
+            why = "is not among them" if not matches else "is ambiguous — add the owner"
+            print(f"\n  {red('FAILED')}  configured teamspace '{want}' {why}")
+            print()
+            return 1
+    elif len(reachable) > 1 and not _in_studio():
         print(
             dim(
-                "\n  note  LIGHTNING_TEAMSPACE / LIGHTNING_ORG aren't set. Fine inside a Studio\n"
-                "        (inferred), but set them for scripts that run elsewhere."
+                "\n  note  several teamspaces, none chosen. Pass --teamspace owner/teamspace, or\n"
+                "        export the lines `whoami --teamspace owner/teamspace` prints."
             )
         )
     print()
@@ -264,13 +302,152 @@ def cmd_auth(args):
 # --- SDK access -----------------------------------------------------------
 
 
-def get_teamspace(name=None, org=None, user=None):
-    """Resolve a Teamspace. Inside a Studio this needs no arguments.
+class Reachable:
+    """One teamspace the authenticated user can reach, with every owner it is listed under.
 
-    Outside one, a teamspace is owned by either an organization or a user — personal
-    teamspaces have no org at all. So don't demand both: pass through whatever was given
-    and let the SDK decide, rather than silently discarding an explicit --teamspace
-    because --org happened to be absent.
+    `slug` is the `owner/teamspace` form the SDK itself accepts as a name.
+    """
+
+    def __init__(self, ts, owner_name):
+        self.ts, self.owner_name = ts, owner_name
+        self.owner_names = {owner_name}
+
+    @property
+    def name(self):
+        return self.ts.name
+
+    @property
+    def slug(self):
+        return f"{self.owner_name}/{self.ts.name}"
+
+
+def _authed_user_helper():
+    """The SDK's who-am-I call, imported where a failure can't pass for a dead key.
+
+    It is a private helper (`lightning_sdk.utils.resolve._get_authed_user`), so a future
+    SDK may move it. That must read as an SDK mismatch, never as rejected credentials.
+    """
+    try:
+        from lightning_sdk.utils.resolve import _get_authed_user
+    except ImportError as e:
+        import lightning_sdk
+
+        sys.exit(
+            f"This lightning_sdk ({lightning_sdk.__version__}) has no\n"
+            f"lightning_sdk.utils.resolve._get_authed_user ({e}).\n"
+            "That's an SDK/lai.py mismatch, not a credentials problem. Pass the teamspace\n"
+            "explicitly (--teamspace <name> --org <owner>) to bypass the inference."
+        )
+    return _get_authed_user
+
+
+def accessible_teamspaces(me=None) -> list[Reachable]:
+    """Every teamspace the current credentials can reach, org-owned spelling preferred.
+
+    This is what lets the skill work without anyone's username or teamspace written into
+    it: the API key already says who you are, and from there the reachable teamspaces are
+    one listing away.
+
+    A personal teamspace is listed twice — once under the user, once under the
+    `<username>-org` organization Lightning auto-creates behind it — with the same id. Keep
+    one entry per id and prefer the org-owned object: older SDKs (seen on 2026.04)
+    dereference `_org.id` in `list_machines()`, so a user-owned Teamspace breaks all
+    pricing there with `'NoneType' object has no attribute 'id'`. The user name is still
+    recorded, so `--user <name>` keeps matching the entry.
+    """
+    me = me or _authed_user_helper()()
+    found: dict[str, Reachable] = {}
+    for org in me.organizations:
+        for ts in org.teamspaces:
+            found.setdefault(ts.id, Reachable(ts, org.name))
+    for ts in me.teamspaces:
+        if ts.id in found:
+            found[ts.id].owner_names.add(me.name)
+        else:
+            found[ts.id] = Reachable(ts, me.name)
+    return sorted(found.values(), key=lambda r: r.slug)
+
+
+def _in_studio() -> bool:
+    return bool(os.environ.get("LIGHTNING_CLOUD_SPACE_ID"))
+
+
+def _wanted(name=None, org=None, user=None) -> tuple[str | None, str | None]:
+    """Which teamspace was asked for: (name, owner), either may be None.
+
+    The more specific source wins, so an explicit choice is never vetoed by a stale
+    export: an `owner/teamspace` slug beats --org/--user, which beat LIGHTNING_ORG.
+    LIGHTNING_USERNAME is deliberately ignored — every Studio sets it, also when the
+    teamspace is org-owned, so treating it as the owner would hide every org teamspace.
+    """
+    name = name or os.environ.get("LIGHTNING_TEAMSPACE") or None
+    owner = org or user or os.environ.get("LIGHTNING_ORG") or None
+    if name and "/" in name:  # the SDK's own `owner/teamspace` form, as `auth` lists it
+        owner, name = name.split("/", 1)
+    return name, owner
+
+
+def _match(reachable, name, owner) -> list[Reachable]:
+    return [
+        r
+        for r in reachable
+        if (not name or r.name == name) and (not owner or owner in r.owner_names)
+    ]
+
+
+def _exit_rejected(e: Exception):
+    """A rejected key, reported as exactly that.
+
+    Two very different failures arrive through the same exception, and guessing wrong
+    sends people down the wrong path for a long time. A rejected key means the
+    credentials are bad — the teamspace name is irrelevant and telling someone to check
+    it is actively misleading. Rotating a key is the usual cause: the old value lingers
+    in an exported env var (or a Studio's injected environment) long after the key
+    itself is dead.
+    """
+    st = auth_state()
+    sys.exit(
+        f"Credentials were REJECTED by the API ({type(e).__name__}).\n"
+        f"Currently using {st['source']}: "
+        f"LIGHTNING_API_KEY={mask(st['api_key'])}\n\n"
+        "The teamspace name is not the problem — these credentials are not valid.\n"
+        "Most likely the key was rotated or revoked and this environment still\n"
+        "holds the old one. `lightning login` will NOT fix this: it validates nothing.\n"
+        "Fix by creating a new key (lightning.ai -> your org (top-left) -> Global\n"
+        "settings -> API Keys) and updating LIGHTNING_USER_ID / LIGHTNING_API_KEY or\n"
+        "~/.lightning/credentials.json; inside a Studio, restart it so the new key is\n"
+        "injected. Then re-run `python lai.py auth` to confirm."
+    )
+
+
+def _is_rejection(e: Exception) -> bool:
+    """Whether the API refused the credentials, as opposed to anything else failing.
+
+    Go by the HTTP status where the exception carries one (the SDK's ApiException does),
+    else by the SDK's own wording. Never by a bare "401" substring: ids and names contain
+    digits, and calling a missing teamspace a dead key is the costlier mistake.
+    """
+    if getattr(e, "status", None) == 401:
+        return True
+    s = str(e).lower()
+    return any(
+        p in s for p in ("authentication failed", "unauthorized", "no authentication methods")
+    )
+
+
+def get_teamspace(name=None, org=None, user=None):
+    """Resolve a Teamspace, inferring whatever was not given.
+
+    Order:
+      1. Inside a Studio with nothing given on the command line: `Teamspace()`, which
+         the SDK fills from the Studio's environment.
+      2. Teamspace and owner both known (slug, flags, or LIGHTNING_TEAMSPACE +
+         LIGHTNING_ORG): construct it directly — no listing.
+      3. Otherwise, or if 2 fails for a reason other than the key: list every teamspace
+         these credentials reach and narrow it by whatever was given. Exactly one match
+         is used, and named on stderr so the choice is visible; several make it stop and
+         list them. Never guess between teamspaces — jobs and spend would land in the
+         wrong one.
     """
     try:
         from lightning_sdk import Teamspace
@@ -289,50 +466,52 @@ def get_teamspace(name=None, org=None, user=None):
             "Run `python lai.py auth` for setup instructions."
         )
 
-    name = name or os.environ.get("LIGHTNING_TEAMSPACE")
-    org = org or os.environ.get("LIGHTNING_ORG")
-    # A teamspace has exactly one owner, so never send both. LIGHTNING_USERNAME is set
-    # inside every Studio even when the teamspace is org-owned, so it's only a fallback.
-    if not org:
-        user = user or os.environ.get("LIGHTNING_USERNAME")
-    else:
-        user = None
-    kwargs = {k: v for k, v in (("name", name), ("org", org), ("user", user)) if v}
+    explicit = bool(name or org or user)
+    name, owner = _wanted(name, org, user)
+
     try:
-        return Teamspace(**kwargs) if kwargs else Teamspace()
+        if _in_studio() and not explicit:
+            return Teamspace()
+        if name and owner:
+            try:
+                # Personal teamspaces resolve through their auto-created org too, so the
+                # org spelling covers nearly every case without listing anything.
+                return Teamspace(name=name, org=owner)
+            except Exception as e:  # noqa: BLE001
+                if _is_rejection(e):
+                    raise
+                # A user-owned teamspace, or a typo: the listing below sorts out which,
+                # and its error shows what is actually reachable.
+        reachable = accessible_teamspaces()
     except Exception as e:  # noqa: BLE001 - surface the real cause to the user
-        tried = ", ".join(f"{k}={v!r}" for k, v in kwargs.items()) or "no arguments (inferred)"
-        # Two very different failures arrive through the same exception, and guessing
-        # wrong sends people down the wrong path for a long time. A rejected key means
-        # the credentials are bad — the teamspace name is irrelevant and telling someone
-        # to check it is actively misleading. Rotating a key is the usual cause: the old
-        # value lingers in an exported env var (or a Studio's injected environment) long
-        # after the key itself is dead.
-        if "authentication failed" in str(e).lower() or "unauthor" in str(e).lower():
-            st = auth_state()
-            sys.exit(
-                f"Credentials were REJECTED by the API ({type(e).__name__}).\n"
-                f"Currently using {st['source']}: "
-                f"LIGHTNING_API_KEY={mask(st['api_key'])}\n\n"
-                "The teamspace name is not the problem — these credentials are not valid.\n"
-                "Most likely the key was rotated or revoked and this environment still\n"
-                "holds the old one. Fix by:\n"
-                "  - updating LIGHTNING_API_KEY / LIGHTNING_USER_ID to the new values, or\n"
-                "  - `unset LIGHTNING_API_KEY` and running `lightning login`, or\n"
-                "  - inside a Studio, restarting it so the new key is injected.\n"
-                "New keys: lightning.ai -> your org (top-left) -> Global settings -> API Keys.\n"
-                "Then re-run `python lai.py auth` to confirm."
-            )
+        if _is_rejection(e):
+            _exit_rejected(e)
         sys.exit(
             f"Could not resolve a teamspace ({type(e).__name__}: {e}).\n"
-            f"Tried: {tried}\n\n"
-            "Credentials look valid, so this is about *where* to work, not who you are.\n"
-            "Outside a Studio you must name the teamspace and say who owns it:\n"
-            "  --teamspace <name> --org <org>     (organization-owned)\n"
-            "  --teamspace <name> --user <user>   (personal teamspace — no org)\n"
-            "or export LIGHTNING_TEAMSPACE with LIGHTNING_ORG / LIGHTNING_USERNAME.\n"
-            "Run `python lai.py auth` to check credentials and get setup steps."
+            f"Asked for: {f'{owner}/{name}' if owner else name or 'nothing — inferring'}\n\n"
+            "This is not a credential rejection. Run `python lai.py auth` to check the key\n"
+            "and list the teamspaces it reaches."
         )
+
+    matches = _match(reachable, name, owner)
+    if len(matches) == 1:
+        r = matches[0]
+        if not (name and owner):
+            print(dim(f"teamspace: {r.slug} (inferred — pass --teamspace to choose)"), file=sys.stderr)
+        return r.ts
+
+    wanted = " ".join(f"{k}={v}" for k, v in (("teamspace", name), ("owner", owner)) if v)
+    listing = "\n".join(f"  {r.slug}" for r in reachable) or "  (none)"
+    if not matches:
+        sys.exit(
+            f"No reachable teamspace matches {wanted or 'these credentials'}.\n"
+            f"Teamspaces these credentials reach:\n{listing}"
+        )
+    sys.exit(
+        "Several teamspaces match, and picking one silently could put jobs and spend in\n"
+        "the wrong place. Choose with --teamspace owner/teamspace:\n"
+        + "\n".join(f"  {r.slug}" for r in matches)
+    )
 
 
 def has_spot(m) -> bool:
@@ -420,6 +599,7 @@ def cmd_whoami(args):
     print(bold("\nLightning AI context"))
     print(f"  teamspace       {ts.name}")
     print(f"  owner           {ts.owner}")
+    owner_var = "LIGHTNING_ORG" if type(ts.owner).__name__ == "Organization" else "LIGHTNING_USERNAME"
     print(f"  teamspace default cloud account  {ts.default_cloud_account}")
 
     eff, why = effective_account(ts)
@@ -447,6 +627,12 @@ def cmd_whoami(args):
 
     env_auth = bool(os.environ.get("LIGHTNING_API_KEY"))
     print(f"  auth via env    {'yes' if env_auth else 'no (using stored credentials)'}")
+    if not _in_studio():
+        # Scripts that call a bare `Teamspace()` (the launcher template does) only work
+        # outside a Studio with these set. Print them rather than make anyone type names.
+        print(dim("\n  for scripts that call Teamspace() outside a Studio:"))
+        print(f"    export LIGHTNING_TEAMSPACE={ts.name}")
+        print(f"    export {owner_var}={ts.owner.name}")
     print()
     return 0
 

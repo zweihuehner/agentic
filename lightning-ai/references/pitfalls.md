@@ -164,6 +164,37 @@ a factor of two or more — the same family is priced very differently per provi
 **Fix:** run `scripts/lai.py whoami`, which prints both and flags the mismatch. Pass
 `--cloud-account` explicitly whenever it matters.
 
+## A personal teamspace addressed with `user=` breaks `list_machines()` (older SDKs)
+
+Lightning backs every personal teamspace with an auto-created organization, observed as
+**`<username>-org`**. The same teamspace is therefore reachable two ways, with the same
+id:
+
+```python
+Teamspace(name="<teamspace>", user="<username>")       # owner=User(...),         _org is None
+Teamspace(name="<teamspace>", org="<username>-org")    # owner=Organization(...), _org is set
+```
+
+On older SDKs (seen on 2026.04.23) `Teamspace.list_machines()` ends with
+`org_id=self._org.id`, so the `user=` form raises
+`AttributeError: 'NoneType' object has no attribute 'id'`. Pricing, `preflight`, and
+anything else that enumerates machines fail — while `whoami`, `ts.jobs`, and plain auth
+all work fine, which makes it look like a pricing outage rather than an addressing
+problem. Membership listings show *both* owners, so the `user=` spelling looks equally
+legitimate. Newer SDKs (2026.10.13) pass `org_id=None` safely, and also deprecate
+`org=`/`user=` in favour of `name="owner/teamspace"`.
+
+**Fix:** nothing to do when going through `lai.py` — it lists reachable teamspaces from the
+credentials and always resolves to the org-owned object. In your own code, take the
+teamspace from `org.teamspaces` for one of `_get_authed_user().organizations` rather than
+constructing it from a username. If you are stuck with a `user=`-constructed object on an
+old SDK, call the underlying API directly with `org_id=None`:
+
+```python
+accts = [c.id for c in ts._cloud_account_api.list_global_cloud_accounts(teamspace_id=ts.id)]
+cms = ts._teamspace_api.list_machines(ts.id, cloud_accounts=accts, machine=None, org_id=None)
+```
+
 ## Missing `max_runtime`
 
 A job that hangs — deadlocked dataloader, a wait on input that never arrives — bills
