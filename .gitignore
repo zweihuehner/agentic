@@ -1,3 +1,6 @@
 __pycache__/
 *.py[cod]
 .DS_Store
+
+# Written by Claude Code when it loads a mod for development
+.claude-plugin/types/

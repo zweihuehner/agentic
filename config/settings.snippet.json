@@ -1,0 +1,8 @@
+{
+  "env": { "CLAUDE_CODE_ENABLE_TODO_TOOLS": "1" },
+  "statusLine": {
+    "type": "command",
+    "command": "~/.claude/statusline.sh",
+    "refreshInterval": 60
+  }
+}
