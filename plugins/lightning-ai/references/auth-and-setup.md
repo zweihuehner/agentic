@@ -184,10 +184,19 @@ give. One match is used and named on stderr; several make it stop and list them 
 the name when it is unique. `lai.py auth` prints the full list, and checks a configured
 teamspace against it, so a typo fails there rather than on the first real command.
 
-The more specific choice always wins, so a stale export can't veto an explicit one: a
-slug beats `--org`/`--user`, which beat `LIGHTNING_TEAMSPACE`/`LIGHTNING_ORG`.
-`LIGHTNING_USERNAME` is ignored for this — every Studio sets it, org-owned teamspace or
-not. With both name and owner known, the teamspace is constructed directly, no listing.
+Command-line input and exported variables are never mixed, so a stale export can't veto
+an explicit choice. A teamspace given on the command line takes its owner only from the
+command line (a slug, then `--org`, then `--user`). An exported owner — `LIGHTNING_ORG`,
+or `LIGHTNING_USERNAME` outside a Studio — applies only together with an exported
+`LIGHTNING_TEAMSPACE`, exactly as `whoami` prints them. Inside a Studio
+`LIGHTNING_USERNAME` is ignored: every Studio sets it, org-owned teamspace or not.
+
+**Cost.** With a name and an org-spelled owner (a slug, `--org`, or `LIGHTNING_ORG`)
+`lai.py` first tries to construct the teamspace directly — one lookup. Everything else,
+and a direct lookup that fails for any reason other than the key, falls back to the
+listing: one call for the user plus one per organization. `--user` always lists, since an
+org that happens to share the user's name could otherwise answer. If that adds up,
+export the two lines `whoami` prints once and every later call takes the direct path.
 
 The same inference in plain SDK calls, for a script of your own:
 
