@@ -50,10 +50,10 @@ python <skill>/scripts/lai.py auth
 ```
 
 It checks the Python version and SDK install, reports which credential source is active,
-and then proves it by making a real API call. Keys are masked in the output. When nothing
-is set up it prints the exact click-path to the API key (**lightning.ai → your org
-name/logo top-left → Global settings → API Keys**), the two `export` lines to paste, and
-where to persist them.
+proves it with a real API call (it asks who the key belongs to), and lists every teamspace
+those credentials can reach. Keys are masked in the output. When nothing is set up it
+prints the exact click-path to the API key (**lightning.ai → your org name/logo top-left →
+Global settings → API Keys**), the two `export` lines to paste, and where to persist them.
 
 **The failure mode worth knowing:** with no credentials the SDK doesn't raise — it opens a
 browser and blocks. In a script, CI job, or agent session that's an unexplained hang, not
@@ -62,11 +62,23 @@ an error. `lai.py` checks up front and exits with a message instead. If the user
 
 Two more things that bite: environment variables **override** the `lightning login`
 credentials file, so a stale exported key silently defeats a fresh login. And credentials
-identify *who* you are, not *where* to work — outside a Studio you also need to name the
-teamspace and its owner. A teamspace belongs to an organization **or** to a user, so
-personal teamspaces take `user=` and have no org at all: `Teamspace(name=..., org=...)`
-or `Teamspace(name=..., user=...)`. Every `lai.py` command accepts `--teamspace` with
-`--org` or `--user`.
+identify *who* you are, not *where* to work. **Never hardcode a username, org or
+teamspace** — not in this skill, not in a launcher script you write. `lai.py` infers them:
+inside a Studio from the environment, elsewhere from the credentials themselves (the key
+says who you are; the teamspaces you can reach are one listing away). With exactly one
+reachable teamspace it just uses it and says which on stderr. With several it stops and
+lists them as `owner/teamspace` — then ask the user which one, and pass it as
+`--teamspace owner/teamspace`. Don't pick for them: jobs and spend land wherever you point.
+
+**When the key is dead rather than missing** — API calls returning `401` / `ConnectionError:
+Authentication failed` — do *not* send the user to `lightning login`. It validates nothing:
+an exported key short-circuits it, a bare credentials file makes it print "already logged
+in", and it has no `--force`. The working recovery is a hand-off: the user creates a key at
+**lightning.ai → org logo top-left → Global settings → API Keys**, pastes the User ID and
+API Key into the conversation, and you verify them inline and then write them to
+`~/.lightning/credentials.json` — exports don't survive between tool calls. Full steps,
+including what to tell the user about pasting a secret into a chat, are in
+`references/auth-and-setup.md` under "Handing credentials to an agent session".
 
 Full setup and troubleshooting: `references/auth-and-setup.md`.
 
@@ -78,9 +90,10 @@ Once auth works, find out where you are:
 python <skill>/scripts/lai.py whoami
 ```
 
-This reports the teamspace, org, both the teamspace-default and the *effective* cloud
-account, and how many jobs already exist. Inside a Studio, `Teamspace()` infers everything
-from the environment.
+This reports the teamspace, owner, both the teamspace-default and the *effective* cloud
+account, and how many jobs already exist. Outside a Studio it also prints the
+`export LIGHTNING_TEAMSPACE=…` / `LIGHTNING_ORG=…` lines that a script calling a bare
+`Teamspace()` needs — copy those rather than typing names in.
 
 ### 2. Design the job
 
