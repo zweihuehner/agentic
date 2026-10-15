@@ -14,7 +14,7 @@ The catalogue lives on the teamspace:
 
 ```python
 from lightning_sdk import Teamspace
-ts = Teamspace()   # inside a Studio; elsewhere pass name= plus org= (or user=)
+ts = Teamspace()   # inside a Studio; elsewhere export what `lai.py whoami` prints
 
 for m in ts.list_machines():
     print(m.slug, m.family, m.accelerator_count,

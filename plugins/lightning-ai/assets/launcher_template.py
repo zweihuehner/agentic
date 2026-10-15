@@ -75,6 +75,9 @@ def price(ts, machine, cloud_account=None):
 
 
 def main():
+    # Inside a Studio this resolves itself. Elsewhere it reads LIGHTNING_TEAMSPACE and
+    # LIGHTNING_ORG — export the two lines `lai.py whoami` prints rather than writing
+    # names into this file.
     ts = Teamspace()
 
     if (STUDIO is None) == (IMAGE is None):
