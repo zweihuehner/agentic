@@ -1,0 +1,6 @@
+{
+  "name": "tasks-panel",
+  "description": "A tasks pane: Claude's tasks, open decisions, and the session's goal from its plan file",
+  "author": { "name": "Faro Schäfer" },
+  "types": "./types/index.d.ts"
+}

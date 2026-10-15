@@ -1,6 +1,6 @@
 {
   "name": "agentic",
-  "description": "Personal Claude Code skills, grounded against live systems rather than docs",
+  "description": "Personal agent tooling: Claude Code skills, mods and config",
   "owner": {
     "name": "zweihuehner"
   },
@@ -8,7 +8,14 @@
     {
       "name": "lightning-ai",
       "source": "./plugins/lightning-ai",
-      "description": "Research and development work on Lightning AI: authentication, batch Jobs via lightning_sdk, live machine pricing across cloud accounts, cost control, and storage layout"
+      "description": "Research and development work on Lightning AI: authentication, batch Jobs via lightning_sdk, live machine pricing across cloud accounts, cost control, and storage layout",
+      "category": "skill"
+    },
+    {
+      "name": "tasks-panel",
+      "source": "./plugins/tasks-panel",
+      "description": "A pane with Claude's tasks, open decisions and the session goal (Claude Code mod)",
+      "category": "mod"
     }
   ]
 }
