@@ -237,13 +237,20 @@ def cmd_auth(args):
     # we are before anything else: resolving a teamspace first would let a dead key surface
     # as a teamspace problem, and that wrong diagnosis costs far more than the extra call.
     print(dim("\n  verifying against the API…"))
+    get_authed_user = _authed_user_helper()
     try:
-        from lightning_sdk.utils.resolve import _get_authed_user
-
-        me = _get_authed_user()
+        me = get_authed_user()
         print(f"  {green('OK')}  authenticated as '{me.name}'")
     except Exception as e:  # noqa: BLE001
         print(f"  {red('FAILED')}  {type(e).__name__}: {str(e)[:200]}")
+        if not _is_rejection(e):
+            # Not a verdict on the key. Saying "rejected" here would send someone to
+            # rotate a working key over a DNS hiccup or a 5xx.
+            print(
+                "\n  This is not a credential rejection — the API could not be reached, or the\n"
+                "  SDK failed. Check the network/proxy and retry before touching the key.\n"
+            )
+            return 1
         print(
             "\n  These credentials were rejected. Common causes:\n"
             "    - key revoked, rotated or mistyped (they're shown once; create a new one)\n"
@@ -257,7 +264,7 @@ def cmd_auth(args):
     # 4. Where can these credentials work? Listing is cheap and answers the next question
     # (which teamspace?) before anyone has to ask it.
     try:
-        reachable = accessible_teamspaces()
+        reachable = accessible_teamspaces(me)
     except Exception as e:  # noqa: BLE001
         print(f"  {yellow('WARN')}  could not list teamspaces: {type(e).__name__}: {str(e)[:200]}")
         print()
@@ -267,11 +274,25 @@ def cmd_auth(args):
         print(f"    {t.slug}")
     if not reachable:
         print(yellow("    none — create one at lightning.ai, or ask to be added to one"))
-    elif len(reachable) > 1 and not (args.teamspace or os.environ.get("LIGHTNING_TEAMSPACE")):
+
+    # 5. If a teamspace is configured, check it is one of those — a typo in an exported
+    # LIGHTNING_TEAMSPACE should fail here, not on the first real command.
+    name, owner = _wanted(args.teamspace, args.org, args.user)
+    if name:
+        matches = _match(reachable, name, owner)
+        want = f"{owner}/{name}" if owner else name
+        if len(matches) == 1:
+            print(f"\n  {green('OK')}  configured teamspace '{want}' -> {matches[0].slug}")
+        else:
+            why = "is not among them" if not matches else "is ambiguous — add the owner"
+            print(f"\n  {red('FAILED')}  configured teamspace '{want}' {why}")
+            print()
+            return 1
+    elif len(reachable) > 1 and not _in_studio():
         print(
             dim(
-                "\n  note  several teamspaces, none chosen. Outside a Studio, pass --teamspace or\n"
-                "        export LIGHTNING_TEAMSPACE (+ LIGHTNING_ORG) — `whoami` prints the lines."
+                "\n  note  several teamspaces, none chosen. Pass --teamspace owner/teamspace, or\n"
+                "        export the lines `whoami --teamspace owner/teamspace` prints."
             )
         )
     print()
@@ -287,8 +308,8 @@ class Reachable:
     `slug` is the `owner/teamspace` form the SDK itself accepts as a name.
     """
 
-    def __init__(self, ts, owner_kind, owner_name):
-        self.ts, self.owner_kind, self.owner_name = ts, owner_kind, owner_name
+    def __init__(self, ts, owner_name):
+        self.ts, self.owner_name = ts, owner_name
         self.owner_names = {owner_name}
 
     @property
@@ -300,7 +321,27 @@ class Reachable:
         return f"{self.owner_name}/{self.ts.name}"
 
 
-def accessible_teamspaces() -> list[Reachable]:
+def _authed_user_helper():
+    """The SDK's who-am-I call, imported where a failure can't pass for a dead key.
+
+    It is a private helper (`lightning_sdk.utils.resolve._get_authed_user`), so a future
+    SDK may move it. That must read as an SDK mismatch, never as rejected credentials.
+    """
+    try:
+        from lightning_sdk.utils.resolve import _get_authed_user
+    except ImportError as e:
+        import lightning_sdk
+
+        sys.exit(
+            f"This lightning_sdk ({lightning_sdk.__version__}) has no\n"
+            f"lightning_sdk.utils.resolve._get_authed_user ({e}).\n"
+            "That's an SDK/lai.py mismatch, not a credentials problem. Pass the teamspace\n"
+            "explicitly (--teamspace <name> --org <owner>) to bypass the inference."
+        )
+    return _get_authed_user
+
+
+def accessible_teamspaces(me=None) -> list[Reachable]:
     """Every teamspace the current credentials can reach, org-owned spelling preferred.
 
     This is what lets the skill work without anyone's username or teamspace written into
@@ -314,23 +355,44 @@ def accessible_teamspaces() -> list[Reachable]:
     pricing there with `'NoneType' object has no attribute 'id'`. The user name is still
     recorded, so `--user <name>` keeps matching the entry.
     """
-    from lightning_sdk.utils.resolve import _get_authed_user
-
-    me = _get_authed_user()
+    me = me or _authed_user_helper()()
     found: dict[str, Reachable] = {}
     for org in me.organizations:
         for ts in org.teamspaces:
-            found.setdefault(ts.id, Reachable(ts, "org", org.name))
+            found.setdefault(ts.id, Reachable(ts, org.name))
     for ts in me.teamspaces:
         if ts.id in found:
             found[ts.id].owner_names.add(me.name)
         else:
-            found[ts.id] = Reachable(ts, "user", me.name)
+            found[ts.id] = Reachable(ts, me.name)
     return sorted(found.values(), key=lambda r: r.slug)
 
 
 def _in_studio() -> bool:
     return bool(os.environ.get("LIGHTNING_CLOUD_SPACE_ID"))
+
+
+def _wanted(name=None, org=None, user=None) -> tuple[str | None, str | None]:
+    """Which teamspace was asked for: (name, owner), either may be None.
+
+    The more specific source wins, so an explicit choice is never vetoed by a stale
+    export: an `owner/teamspace` slug beats --org/--user, which beat LIGHTNING_ORG.
+    LIGHTNING_USERNAME is deliberately ignored — every Studio sets it, also when the
+    teamspace is org-owned, so treating it as the owner would hide every org teamspace.
+    """
+    name = name or os.environ.get("LIGHTNING_TEAMSPACE") or None
+    owner = org or user or os.environ.get("LIGHTNING_ORG") or None
+    if name and "/" in name:  # the SDK's own `owner/teamspace` form, as `auth` lists it
+        owner, name = name.split("/", 1)
+    return name, owner
+
+
+def _match(reachable, name, owner) -> list[Reachable]:
+    return [
+        r
+        for r in reachable
+        if (not name or r.name == name) and (not owner or owner in r.owner_names)
+    ]
 
 
 def _exit_rejected(e: Exception):
@@ -359,22 +421,33 @@ def _exit_rejected(e: Exception):
 
 
 def _is_rejection(e: Exception) -> bool:
+    """Whether the API refused the credentials, as opposed to anything else failing.
+
+    Go by the HTTP status where the exception carries one (the SDK's ApiException does),
+    else by the SDK's own wording. Never by a bare "401" substring: ids and names contain
+    digits, and calling a missing teamspace a dead key is the costlier mistake.
+    """
+    if getattr(e, "status", None) == 401:
+        return True
     s = str(e).lower()
-    return "authentication failed" in s or "unauthor" in s or "401" in s
+    return any(
+        p in s for p in ("authentication failed", "unauthorized", "no authentication methods")
+    )
 
 
 def get_teamspace(name=None, org=None, user=None):
     """Resolve a Teamspace, inferring whatever was not given.
 
     Order:
-      1. --teamspace + --org (or LIGHTNING_TEAMSPACE + LIGHTNING_ORG): used as given.
-      2. Inside a Studio with nothing given on the command line: `Teamspace()`, which
+      1. Inside a Studio with nothing given on the command line: `Teamspace()`, which
          the SDK fills from the Studio's environment.
-      3. Otherwise: list every teamspace these credentials reach and narrow it by
-         whatever was given (--teamspace, --user / LIGHTNING_USERNAME). Exactly one
-         match is used, and named on stderr so the choice is visible; several make it
-         stop and list them. Never guess between teamspaces — jobs and spend would land
-         in the wrong one.
+      2. Teamspace and owner both known (slug, flags, or LIGHTNING_TEAMSPACE +
+         LIGHTNING_ORG): construct it directly — no listing.
+      3. Otherwise, or if 2 fails for a reason other than the key: list every teamspace
+         these credentials reach and narrow it by whatever was given. Exactly one match
+         is used, and named on stderr so the choice is visible; several make it stop and
+         list them. Never guess between teamspaces — jobs and spend would land in the
+         wrong one.
     """
     try:
         from lightning_sdk import Teamspace
@@ -394,51 +467,40 @@ def get_teamspace(name=None, org=None, user=None):
         )
 
     explicit = bool(name or org or user)
-    name = name or os.environ.get("LIGHTNING_TEAMSPACE")
-    org = org or os.environ.get("LIGHTNING_ORG")
-    owner = None
-    if name and "/" in name:  # the SDK's own `owner/teamspace` form, as `auth` lists it
-        owner, name = name.split("/", 1)
+    name, owner = _wanted(name, org, user)
 
     try:
-        if name and org and not owner:
-            return Teamspace(name=name, org=org)
         if _in_studio() and not explicit:
             return Teamspace()
-        # LIGHTNING_USERNAME is set inside every Studio even when the teamspace is
-        # org-owned, so it narrows the search rather than naming the owner outright.
-        user = user or os.environ.get("LIGHTNING_USERNAME")
+        if name and owner:
+            try:
+                # Personal teamspaces resolve through their auto-created org too, so the
+                # org spelling covers nearly every case without listing anything.
+                return Teamspace(name=name, org=owner)
+            except Exception as e:  # noqa: BLE001
+                if _is_rejection(e):
+                    raise
+                # A user-owned teamspace, or a typo: the listing below sorts out which,
+                # and its error shows what is actually reachable.
         reachable = accessible_teamspaces()
-    except SystemExit:
-        raise
     except Exception as e:  # noqa: BLE001 - surface the real cause to the user
         if _is_rejection(e):
             _exit_rejected(e)
-        tried = ", ".join(f"{k}={v!r}" for k, v in (("name", name), ("org", org)) if v)
         sys.exit(
             f"Could not resolve a teamspace ({type(e).__name__}: {e}).\n"
-            f"Tried: {tried or 'inferring from the credentials'}\n\n"
-            "Credentials look valid, so this is about *where* to work, not who you are.\n"
-            "Run `python lai.py auth` to list the teamspaces these credentials reach."
+            f"Asked for: {f'{owner}/{name}' if owner else name or 'nothing — inferring'}\n\n"
+            "This is not a credential rejection. Run `python lai.py auth` to check the key\n"
+            "and list the teamspaces it reaches."
         )
 
-    matches = [
-        r
-        for r in reachable
-        if (not name or r.name == name)
-        and (not org or r.owner_name == org)
-        and (not user or user in r.owner_names)
-        and (not owner or owner in r.owner_names)
-    ]
+    matches = _match(reachable, name, owner)
     if len(matches) == 1:
         r = matches[0]
-        if not (name and (org or user or owner)):
+        if not (name and owner):
             print(dim(f"teamspace: {r.slug} (inferred — pass --teamspace to choose)"), file=sys.stderr)
         return r.ts
 
-    wanted = " ".join(
-        f"{k}={v}" for k, v in (("teamspace", name), ("owner", owner or org or user)) if v
-    )
+    wanted = " ".join(f"{k}={v}" for k, v in (("teamspace", name), ("owner", owner)) if v)
     listing = "\n".join(f"  {r.slug}" for r in reachable) or "  (none)"
     if not matches:
         sys.exit(
@@ -447,8 +509,8 @@ def get_teamspace(name=None, org=None, user=None):
         )
     sys.exit(
         "Several teamspaces match, and picking one silently could put jobs and spend in\n"
-        "the wrong place. Choose with --teamspace <name> (add --org <owner> if the name\n"
-        "repeats):\n" + "\n".join(f"  {r.slug}" for r in matches)
+        "the wrong place. Choose with --teamspace owner/teamspace:\n"
+        + "\n".join(f"  {r.slug}" for r in matches)
     )
 
 

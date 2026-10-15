@@ -179,10 +179,15 @@ account all come from the environment.
 
 **Outside one**, `lai.py` infers it from the credentials: it asks the API who the key
 belongs to, lists every teamspace that user can reach, and narrows by whatever you did
-give (`--teamspace`, `--org`, `--user`, or the `LIGHTNING_*` variables). One match is used
-and named on stderr; several make it stop and list them as `owner/teamspace`. Pick one by
-passing that slug — `--teamspace owner/teamspace` — or just the name when it is unique.
-`lai.py auth` prints the full list.
+give. One match is used and named on stderr; several make it stop and list them as
+`owner/teamspace`. Pick one by passing that slug — `--teamspace owner/teamspace` — or just
+the name when it is unique. `lai.py auth` prints the full list, and checks a configured
+teamspace against it, so a typo fails there rather than on the first real command.
+
+The more specific choice always wins, so a stale export can't veto an explicit one: a
+slug beats `--org`/`--user`, which beat `LIGHTNING_TEAMSPACE`/`LIGHTNING_ORG`.
+`LIGHTNING_USERNAME` is ignored for this — every Studio sets it, org-owned teamspace or
+not. With both name and owner known, the teamspace is constructed directly, no listing.
 
 The same inference in plain SDK calls, for a script of your own:
 
