@@ -231,6 +231,55 @@ is rarely what someone intends when they were explicit about everything else. De
 consciously: `studio=` for "it already runs in my Studio", `image=` for a pinned,
 reproducible environment.
 
+## `studio=` pins the job to the Studio's cloud account
+
+`studio=` reuses more than the environment: the job lands on the **Studio's cloud
+account**, and `cloud=` does not override it. So the machine you can ask for is limited to
+what that one account sells — a constraint that is invisible until the API rejects it:
+
+```python
+Job.run(name=..., machine=Machine.L4, studio="my-studio",
+        cloud="gcp-lightning-public-prod")
+```
+```
+ApiException: (400) Bad Request
+{"code":3,"message":"failed to convert user requested compute config to internal:
+ accelerator lit-l4-1 not found for this Lightning cluster"}
+```
+
+The Studio was on a bare-metal account selling only H100; L4 exists on the account named
+in `cloud=`, which was ignored. The message names the *slug*, not the account, so it reads
+like the machine doesn't exist anywhere.
+
+Moving the Studio isn't the fix either: `Studio.duplicate(target_teamspace, machine, name)`
+has no cloud-account parameter — it duplicates within the teamspace, not across providers.
+
+**Fix:** decide which constraint is real.
+
+- Machine is negotiable → pick one the Studio's account offers (`lai.py prices`).
+- Machine is fixed (matching a recorded baseline's GPU, say) → drop `studio=` and run from
+  `image=`, bootstrapping the environment in the job command. `assets/bootstrap_job.py` is
+  a working launcher for exactly this. It costs a few minutes of setup per job and
+  benchmarks a clean checkout rather than your Studio worktree — often a feature.
+
+Check what each account sells with `lai.py compare --family <FAM>` before choosing.
+
+## Job logs are unavailable until the job is terminal
+
+`job.logs` is not a live stream. On a Pending or Running job it raises:
+
+```
+RuntimeError: Getting jobs logs while the job is pending or running is not supported yet!
+```
+
+A launcher that submits and then prints `job.logs` to show progress therefore dies at the
+first poll — and a `try/except` around it hides the job's real state.
+
+**Fix:** poll `job.status` until it reaches `Completed` / `Failed` / `Stopped`, then read
+`job.logs` once. For watching a run as it happens, hand the user `job.link` — the UI does
+stream. Anything the job must report back (a metrics table, a diff) still belongs on
+stdout: it's all there in the log once the job ends.
+
 ## Stale snapshots
 
 `reuse_snapshot=True` is the default and avoids re-uploading an unchanged Studio
