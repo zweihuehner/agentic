@@ -237,7 +237,15 @@ def cmd_auth(args):
     # we are before anything else: resolving a teamspace first would let a dead key surface
     # as a teamspace problem, and that wrong diagnosis costs far more than the extra call.
     print(dim("\n  verifying against the API…"))
-    get_authed_user = _authed_user_helper()
+    get_authed_user = _authed_user_helper(required=False)
+    if get_authed_user is None:
+        # A moved private helper must not make the start-here command useless: verify
+        # through the configured teamspace instead (get_teamspace reports a rejected
+        # key as such, and exits with a pointer if no teamspace is configured).
+        print(dim("  this SDK has no _get_authed_user; verifying through the teamspace instead"))
+        ts = get_teamspace(args.teamspace, args.org, args.user)
+        print(f"  {green('OK')}  authenticated — teamspace '{ts.name}', {len(ts.jobs)} jobs\n")
+        return 0
     try:
         me = get_authed_user()
         print(f"  {green('OK')}  authenticated as '{me.name}'")
@@ -266,9 +274,15 @@ def cmd_auth(args):
     try:
         reachable = accessible_teamspaces(me)
     except Exception as e:  # noqa: BLE001
-        print(f"  {yellow('WARN')}  could not list teamspaces: {type(e).__name__}: {str(e)[:200]}")
+        # A failure, not a warning: the configured-teamspace check below depends on it.
+        print(f"  {red('FAILED')}  could not list teamspaces: {type(e).__name__}: {str(e)[:200]}")
+        if _is_rejection(e):
+            print(
+                "\n  The key authenticated but was refused while listing teamspaces — it may\n"
+                "  have been revoked since, or lack access to an organization."
+            )
         print()
-        return 0
+        return 1
     print(f"\n  teamspaces you can reach ({len(reachable)}):")
     for t in reachable:
         print(f"    {t.slug}")
@@ -277,7 +291,20 @@ def cmd_auth(args):
 
     # 5. If a teamspace is configured, check it is one of those — a typo in an exported
     # LIGHTNING_TEAMSPACE should fail here, not on the first real command.
-    name, owner = _wanted(args.teamspace, args.org, args.user)
+    explicit = bool(args.teamspace or args.org or args.user)
+    if _in_studio() and not explicit:
+        # Inside a Studio the context decides, the way every other command resolves it;
+        # matching LIGHTNING_TEAMSPACE by name alone could call a fine setup ambiguous.
+        try:
+            ts = get_teamspace()
+            print(f"\n  {green('OK')}  Studio teamspace -> {ts.owner.name}/{ts.name}")
+        except SystemExit as e:
+            print(f"\n  {red('FAILED')}  Studio teamspace: {e}")
+            print()
+            return 1
+        print()
+        return 0
+    name, owner, _ = _wanted(args.teamspace, args.org, args.user)
     if name:
         matches = _match(reachable, name, owner)
         want = f"{owner}/{name}" if owner else name
@@ -321,15 +348,19 @@ class Reachable:
         return f"{self.owner_name}/{self.ts.name}"
 
 
-def _authed_user_helper():
+def _authed_user_helper(required=True):
     """The SDK's who-am-I call, imported where a failure can't pass for a dead key.
 
     It is a private helper (`lightning_sdk.utils.resolve._get_authed_user`), so a future
     SDK may move it. That must read as an SDK mismatch, never as rejected credentials.
+    With required=False it returns None instead, so `auth` can still verify the key
+    another way.
     """
     try:
         from lightning_sdk.utils.resolve import _get_authed_user
     except ImportError as e:
+        if not required:
+            return None
         import lightning_sdk
 
         sys.exit(
@@ -372,19 +403,32 @@ def _in_studio() -> bool:
     return bool(os.environ.get("LIGHTNING_CLOUD_SPACE_ID"))
 
 
-def _wanted(name=None, org=None, user=None) -> tuple[str | None, str | None]:
-    """Which teamspace was asked for: (name, owner), either may be None.
+def _wanted(name=None, org=None, user=None) -> tuple[str | None, str | None, str | None]:
+    """Which teamspace was asked for: (name, owner, owner_kind), any may be None.
 
-    The more specific source wins, so an explicit choice is never vetoed by a stale
-    export: an `owner/teamspace` slug beats --org/--user, which beat LIGHTNING_ORG.
-    LIGHTNING_USERNAME is deliberately ignored — every Studio sets it, also when the
-    teamspace is org-owned, so treating it as the owner would hide every org teamspace.
+    owner_kind is "org", "user", or None when the owner came from an `owner/teamspace`
+    slug, which does not say which it is.
+
+    Command-line input and exported variables are never mixed, so a stale export can't
+    veto an explicit choice. A name typed on the command line takes its owner only from
+    the command line (slug, then --org, then --user). The exported owner —
+    LIGHTNING_ORG, or LIGHTNING_USERNAME outside a Studio — applies only together with
+    an exported LIGHTNING_TEAMSPACE, as `whoami` prints them. LIGHTNING_USERNAME is
+    ignored inside a Studio: every Studio sets it, also when the teamspace is
+    org-owned, and treating it as the owner there would hide every org teamspace.
     """
-    name = name or os.environ.get("LIGHTNING_TEAMSPACE") or None
-    owner = org or user or os.environ.get("LIGHTNING_ORG") or None
+    kind = "org" if org else "user" if user else None
+    owner = org or user or None
+    if not name:
+        name = os.environ.get("LIGHTNING_TEAMSPACE") or None
+        if name and not owner:
+            env_org = os.environ.get("LIGHTNING_ORG")
+            env_user = None if _in_studio() else os.environ.get("LIGHTNING_USERNAME")
+            kind = "org" if env_org else "user" if env_user else None
+            owner = env_org or env_user or None
     if name and "/" in name:  # the SDK's own `owner/teamspace` form, as `auth` lists it
-        owner, name = name.split("/", 1)
-    return name, owner
+        (owner, name), kind = name.split("/", 1), None
+    return name, owner, kind
 
 
 def _match(reachable, name, owner) -> list[Reachable]:
@@ -467,21 +511,25 @@ def get_teamspace(name=None, org=None, user=None):
         )
 
     explicit = bool(name or org or user)
-    name, owner = _wanted(name, org, user)
+    name, owner, kind = _wanted(name, org, user)
 
     try:
         if _in_studio() and not explicit:
             return Teamspace()
-        if name and owner:
+        if name and owner and kind != "user":
             try:
                 # Personal teamspaces resolve through their auto-created org too, so the
-                # org spelling covers nearly every case without listing anything.
+                # org spelling covers nearly every case without listing anything. Not
+                # for --user: an org that happens to share the user's name would win.
                 return Teamspace(name=name, org=owner)
             except Exception as e:  # noqa: BLE001
                 if _is_rejection(e):
                     raise
                 # A user-owned teamspace, or a typo: the listing below sorts out which,
-                # and its error shows what is actually reachable.
+                # and its error shows what is actually reachable. Without the listing
+                # helper, this lookup's own error is the most useful thing to report.
+                if _authed_user_helper(required=False) is None:
+                    sys.exit(f"Could not resolve teamspace {owner}/{name}: {type(e).__name__}: {e}")
         reachable = accessible_teamspaces()
     except Exception as e:  # noqa: BLE001 - surface the real cause to the user
         if _is_rejection(e):
@@ -599,7 +647,9 @@ def cmd_whoami(args):
     print(bold("\nLightning AI context"))
     print(f"  teamspace       {ts.name}")
     print(f"  owner           {ts.owner}")
-    owner_var = "LIGHTNING_ORG" if type(ts.owner).__name__ == "Organization" else "LIGHTNING_USERNAME"
+    from lightning_sdk import Organization
+
+    owner_var = "LIGHTNING_ORG" if isinstance(ts.owner, Organization) else "LIGHTNING_USERNAME"
     print(f"  teamspace default cloud account  {ts.default_cloud_account}")
 
     eff, why = effective_account(ts)
