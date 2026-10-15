@@ -925,3 +925,28 @@ for (const surface of ['terminal', 'desktop'] as const) {
     }
   })
 }
+
+test('warns once at start when the task tools are not enabled', async (
+  $,
+  on,
+) => {
+  const logged: string[] = []
+  on('ui.log', (_$, e) => {
+    logged.push(String((e as { text?: unknown }).text ?? ''))
+    return { value: undefined }
+  })
+  answer(on)
+  await start($)
+  expect(logged.join('\n')).toContain('CLAUDE_CODE_ENABLE_TODO_TOOLS')
+})
+
+test('stays quiet when the task tools are enabled', async ($, on) => {
+  const logged: string[] = []
+  on('ui.log', () => {
+    logged.push('logged')
+    return { value: undefined }
+  })
+  answer(on, { env: { CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' } })
+  await start($)
+  expect(logged).toEqual([])
+})

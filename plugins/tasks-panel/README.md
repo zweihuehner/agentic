@@ -20,7 +20,8 @@ have no equivalent in other harnesses.
 
 It needs `"CLAUDE_CODE_ENABLE_TODO_TOOLS": "1"` in the `env` block of
 `~/.claude/settings.json` so the task tools are active. `scripts/bootstrap.sh`
-at the repo root sets it.
+at the repo root sets it; without it, the mod prints a one-line hint at session
+start.
 
 Subagents don't get the task tools, so `· agent` shows on a task when it has
 an owner (or a subagent did touch it). Ask Claude to set the owner when it

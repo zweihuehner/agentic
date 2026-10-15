@@ -330,6 +330,10 @@ The user follows your progress in a task panel. These rules are for the main con
 - When something needs the user's decision (a design choice, a tradeoff, unclear requirements), create a task "decide: <short question>" with the options and your recommendation in its description; don't silently pick one. Set dependent tasks blockedBy it, keep working on independent tasks, and when the user answers, record the decision in the description and mark it completed.
 - At the start of a new piece of work, write the goal as one line under "## Goal" in ${path}; create the file if needed and update it only when the goal changes, not for side questions. Open questions that aren't tasks go under "## Open questions" in the same file.`
 
+const TODO_TOOLS_HINT =
+  'task tools may be off: add "CLAUDE_CODE_ENABLE_TODO_TOOLS": "1" to the ' +
+  'env block of ~/.claude/settings.json and restart Claude Code'
+
 const isOk = (r: { deny?: string; isError?: boolean }) =>
   r.deny === undefined && r.isError !== true
 
@@ -344,6 +348,11 @@ export const register: Register = on => {
     })
     await loadTasks($)
     await refreshPlan($)
+    // Without it newer models may not get the task tools, and the pane would
+    // stay empty with no hint why
+    if ((await $.env.get('CLAUDE_CODE_ENABLE_TODO_TOOLS')) !== '1') {
+      $.ui.log(TODO_TOOLS_HINT)
+    }
     // One poll at a time; a failed poll waits for the next tick
     $.clock.every(3000, () => {
       if (isRefreshing) return
