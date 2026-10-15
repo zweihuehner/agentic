@@ -10,9 +10,10 @@ and the config that goes with them. The repo is a plugin marketplace named
 |---|---|---|---|
 | [`lightning-ai`](plugins/lightning-ai/) | skill | Run, price and manage jobs on Lightning AI | Python ≥ 3.11, `lightning-sdk` |
 | [`tasks-panel`](plugins/tasks-panel/) | mod | Pane with Claude's tasks, open decisions and the session goal | Claude Code ≥ 2.1.287, `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` |
+| [`statusline`](plugins/statusline/) | config | Status line with model, context and 5h / 7d limits; `/statusline:setup` turns it on | bash, `jq` |
 
 Skills are plain `SKILL.md` folders and also work in other harnesses that read
-[Agent Skills](https://agentskills.io). Mods are Claude Code only.
+[Agent Skills](https://agentskills.io). Mods and config plugins are Claude Code only.
 
 ## Install
 
@@ -27,7 +28,7 @@ Full setup on a machine (plugins, status line, settings, global git ignore):
 
 ```bash
 git clone https://github.com/zweihuehner/agentic.git ~/dev/agentic
-~/dev/agentic/scripts/bootstrap.sh lightning-ai tasks-panel
+~/dev/agentic/scripts/bootstrap.sh lightning-ai tasks-panel statusline
 ```
 
 `bootstrap.sh` needs bash and `jq`, and is safe to rerun. From a clone the
@@ -50,7 +51,7 @@ To have a project offer a plugin to everyone who trusts it, add to its
 ```
 .claude-plugin/marketplace.json   one entry per plugin
 plugins/<feature>/                one plugin per feature, with its own README
-config/                           status line, settings snippet, git ignores
+config/                           settings snippet, git ignores
 scripts/bootstrap.sh              sets up config/ and plugins on a machine
 ```
 

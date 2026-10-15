@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Sets up this repo's personal Claude Code config on a machine. Safe to rerun.
 #
-#   scripts/bootstrap.sh                 # config + tasks-panel
+#   scripts/bootstrap.sh                 # config + tasks-panel + statusline
 #   scripts/bootstrap.sh lightning-ai    # config + the plugins named
 #
-# - links config/statusline.sh to ~/.claude/statusline.sh
 # - merges config/settings.snippet.json into ~/.claude/settings.json
 # - adds config/gitignore-global to git's global excludes file
 # - adds this clone as the "agentic" marketplace and installs plugins
+# - with statusline, points the statusLine setting at its script
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -18,19 +18,11 @@ STAMP=$(date +%Y%m%d%H%M%S)
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
 mkdir -p "$CLAUDE_DIR"
 
-# Status line: a link, so edits in the repo apply at once
-target=$CLAUDE_DIR/statusline.sh
-if [[ -e $target && ! -L $target ]]; then
-  mv "$target" "$target.bak.$STAMP"
-  echo "moved existing statusline.sh to statusline.sh.bak.$STAMP"
-fi
-ln -sfn "$REPO/config/statusline.sh" "$target"
-
-# Settings: merge the snippet, pointing statusLine at this machine's path
+# Settings: merge the snippet
 [[ -f $SETTINGS ]] || echo '{}' >"$SETTINGS"
 cp "$SETTINGS" "$SETTINGS.bak.$STAMP"
-merged=$(jq --arg cmd "$target" --slurpfile s "$REPO/config/settings.snippet.json" \
-  '. * $s[0] | .statusLine.command = $cmd' "$SETTINGS")
+merged=$(jq --slurpfile s "$REPO/config/settings.snippet.json" '. * $s[0]' \
+  "$SETTINGS")
 if [[ $merged == "$(jq . "$SETTINGS")" ]]; then
   rm "$SETTINGS.bak.$STAMP"
 else
@@ -56,6 +48,14 @@ done <"$REPO/config/gitignore-global"
 if ! claude plugin marketplace list 2>/dev/null | grep -q agentic; then
   claude plugin marketplace add "$REPO"
 fi
-for plugin in "${@:-tasks-panel}"; do
+plugins=("${@:-tasks-panel}")
+(($#)) || plugins+=(statusline)
+for plugin in "${plugins[@]}"; do
   claude plugin install "$plugin@agentic" --scope user
+  if [[ $plugin == statusline ]]; then
+    bash "$REPO/plugins/statusline/setup.sh" --apply
+    # The link older versions of this script made
+    link=$CLAUDE_DIR/statusline.sh
+    [[ -L $link && $(readlink "$link") == "$REPO"/* ]] && rm "$link"
+  fi
 done

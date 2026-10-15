@@ -23,7 +23,7 @@ IFS=$'\x1f' read -r model ctx_bar ctx_used ctx_max h5_bar h5_reset d7_bar \
            | tostring)
           + ":" + (if . >= 90 then "r" elif . >= 70 then "y" else "g" end))
     end;
-  [ (.model.display_name // "" | tostring | ascii_downcase),
+  [ (.model.display_name // "" | tostring | ascii_downcase | split(" ")[0] // ""),
     (.context_window.used_percentage | bar),
     (.context_window.total_input_tokens | n),
     (.context_window.context_window_size | n),

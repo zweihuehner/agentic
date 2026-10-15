@@ -16,6 +16,12 @@
       "source": "./plugins/tasks-panel",
       "description": "A pane with Claude's tasks, open decisions and the session goal (Claude Code mod)",
       "category": "mod"
+    },
+    {
+      "name": "statusline",
+      "source": "./plugins/statusline",
+      "description": "A status line with the model, context window and 5-hour / 7-day limits as dot bars; /statusline:setup turns it on",
+      "category": "config"
     }
   ]
 }

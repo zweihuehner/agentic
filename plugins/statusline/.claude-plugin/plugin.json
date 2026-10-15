@@ -1,0 +1,5 @@
+{
+  "name": "statusline",
+  "description": "A status line with the model, context window and 5-hour / 7-day limits as dot bars",
+  "author": { "name": "Faro Schäfer" }
+}
